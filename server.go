@@ -135,7 +135,7 @@ func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.
 	//TODO 目前仅打印argv和简单的message
 	defer wg.Done()
 
-	log.Println(req.h, req.argv.Elem())
+	log.Println("req.h:", req.h, "req.argv.Elem():", req.argv.Elem())
 	req.replyv = reflect.ValueOf(fmt.Sprintf("sgRPC resp %d", req.h.Seq))
 	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
 }

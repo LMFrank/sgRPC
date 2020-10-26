@@ -101,6 +101,7 @@ func (client *Client) terminateCalls(err error) {
 	}
 }
 
+// 接收响应
 func (client *Client) receive() {
 	var err error
 	for err == nil {
