@@ -2,19 +2,20 @@ package sgRPC
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"reflect"
 	"sgRPC/codec"
+	"strings"
 	"sync"
 )
 
 const MagicNumber = 0x3bef5c
 
 type Option struct {
-	MagicNumber int // 表示这是sgRPC的请求
+	MagicNumber int // 表示这是 sgRPC 的请求
 	CodecType   codec.Type
 }
 
@@ -23,7 +24,9 @@ var DefaultOption = &Option{
 	CodecType:   codec.GobType,
 }
 
-type Server struct{}
+type Server struct {
+	serviceMap sync.Map
+}
 
 func NewServer() *Server {
 	return &Server{}
@@ -53,7 +56,7 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 	}
 
 	if opt.MagicNumber != MagicNumber {
-		log.Printf("rpc server: invalid codec type %s", opt.CodecType)
+		log.Printf("rpc server: invalid codec type %x", opt.CodecType)
 		return
 	}
 
@@ -93,6 +96,8 @@ func (server *Server) serveCodec(cc codec.Codec) {
 type request struct {
 	h            *codec.Header
 	argv, replyv reflect.Value
+	mtype        *methodType
+	svc          *service
 }
 
 func (server *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
@@ -107,16 +112,49 @@ func (server *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 	return &h, nil
 }
 
+// 通过 ServiceMethod 从 serviceMap 中找到对应的 service
+func (server *Server) findService(serviceMethod string) (svc *service, mtype *methodType, err error) {
+	dot := strings.LastIndex(serviceMethod, ".")
+	if dot < 0 {
+		err = errors.New("rpc server: service/method request ill-formed:" + serviceMethod)
+		return
+	}
+	serviceName, methodName := serviceMethod[:dot], serviceMethod[dot+1:]
+	svci, ok := server.serviceMap.Load(serviceName)
+	if !ok {
+		err = errors.New("rpc server: can't find service" + serviceName)
+		return
+	}
+	svc = svci.(*service)
+	mtype = svc.method[methodName]
+	if mtype == nil {
+		err = errors.New("rpc server: can't find method" + methodName)
+	}
+	return
+}
+
 func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 	h, err := server.readRequestHeader(cc)
 	if err != nil {
 		return nil, err
 	}
 	req := &request{h: h}
-	//TODO 目前默认为string类型
-	req.argv = reflect.New(reflect.TypeOf(""))
-	if err = cc.ReadBody(req.argv.Interface()); err != nil {
-		log.Println("rpc server: read argv err", err)
+	req.svc, req.mtype, err = server.findService(h.ServiceMethod)
+	if err != nil {
+		return req, err
+	}
+	req.argv = req.mtype.newArgv()
+	req.replyv = req.mtype.newReplyv()
+
+	// make sure that argvi is a pointer, ReadBody need a pointer as parameter
+	argvi := req.argv.Interface()
+	if req.argv.Type().Kind() != reflect.Ptr {
+		argvi = req.argv.Addr().Interface()
+	}
+	// 通过 cc.ReadBody 将请求报文反序列化为第一个入参 argv
+	if err = cc.ReadBody(argvi); err != nil {
+		log.Println("rpc server: read body err", err)
+		return req, err
 	}
 
 	return req, nil
@@ -132,10 +170,31 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 }
 
 func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
-	//TODO 目前仅打印argv和简单的message
 	defer wg.Done()
-
-	log.Println("req.h:", req.h, "req.argv.Elem():", req.argv.Elem())
-	req.replyv = reflect.ValueOf(fmt.Sprintf("sgRPC resp %d", req.h.Seq))
+	err := req.svc.call(req.mtype, req.argv, req.replyv)
+	if err != nil {
+		req.h.Error = err.Error()
+		server.sendResponse(cc, req.h, invalidRequest, sending)
+		return
+	}
 	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+}
+
+// Register publishes in the server the set of methods of the
+// receiver value that satisfy the following conditions:
+//	- exported method of exported type
+//	- two arguments, both of exported type
+//	- the second argument is a pointer
+//	- one return value, of type error
+func (server *Server) Register(rcvr interface{}) error {
+	s := newService(rcvr)
+	if _, dup := server.serviceMap.LoadOrStore(s.name, s); dup {
+		return errors.New("rpc: service already defined:" + s.name)
+	}
+	return nil
+}
+
+// Register publishes the receiver's methods in the DefaultServer.
+func Register(rcvr interface{}) error {
+	return DefaultServer.Register(rcvr)
 }

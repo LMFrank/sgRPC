@@ -42,7 +42,7 @@ func (m *methodType) newReplyv() reflect.Value {
 }
 
 type service struct {
-	name   string                 //映射的结构体的名称
+	name   string                 // 映射的结构体的名称
 	typ    reflect.Type           // 结构体的类型
 	rcvr   reflect.Value          // 结构体的实例本身，调用时作为第0个参数
 	method map[string]*methodType // 存储映射的结构体的所有符合条件的方法
@@ -63,7 +63,7 @@ func newService(rcvr interface{}) *service {
 func (s *service) registerMethods() {
 	// 过滤符合条件的方法
 	// 两个导出或内置类型的入参，反射时为3个，第0个是自身
-	// 返回值有且只有一个，类型为error
+	// 返回值有且只有一个，类型为 error
 	s.method = make(map[string]*methodType)
 	for i := 0; i < s.typ.NumMethod(); i++ {
 		method := s.typ.Method(i)

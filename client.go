@@ -17,7 +17,7 @@ type Call struct {
 	Args          interface{} // 函数的参数
 	Reply         interface{} // 函数的返回值
 	Error         error
-	Done          chan *Call // 当函数调用完成后会用call.Done通知对方，从而支持异步调用
+	Done          chan *Call // 当函数调用完成后会用 call.Done 通知对方，从而支持异步调用
 }
 
 func (call *Call) done() {
@@ -32,8 +32,8 @@ type Client struct {
 	mu       sync.Mutex
 	seq      uint64           // 请求编号
 	pending  map[uint64]*Call // 存储未处理完的请求，key为编号，value为Call实例
-	closing  bool             // closing或shutdown任一置为true时表示Client处于不可用状态
-	shutdown bool             // closing表示用户主动关闭，shutdown一般是有错误发生
+	closing  bool             // closing 或 shutdown 任一置为 true 时表示 Client 处于不可用状态
+	shutdown bool             // closing 表示用户主动关闭，shutdown 一般是有错误发生
 }
 
 var _ io.Closer = (*Client)(nil)
@@ -59,7 +59,7 @@ func (client *Client) IsAvailable() bool {
 	return !client.shutdown && !client.closing
 }
 
-// 将参数call添加到client.pending中，并更新client.seq
+// 将参数 call 添加到 client.pending 中，并更新 client.seq
 func (client *Client) registerCall(call *Call) (uint64, error) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -75,7 +75,7 @@ func (client *Client) registerCall(call *Call) (uint64, error) {
 	return call.Seq, nil
 }
 
-// 根据seq，从client.pending中移除对应的call
+// 根据 seq，从 client.pending 中移除对应的 call
 func (client *Client) removeCall(seq uint64) *Call {
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -86,7 +86,7 @@ func (client *Client) removeCall(seq uint64) *Call {
 	return call
 }
 
-// 调用错误时，将shutdown置为true，且将错误信息通知给所有pending状态的call
+// 发生错误时，将 shutdown 置为 true，且将错误信息通知给所有 pending 状态的 call
 func (client *Client) terminateCalls(err error) {
 	client.sending.Lock()
 	defer client.sending.Unlock()
@@ -99,102 +99,6 @@ func (client *Client) terminateCalls(err error) {
 		call.Error = err
 		call.done()
 	}
-}
-
-// 接收响应
-func (client *Client) receive() {
-	var err error
-	for err == nil {
-		var h codec.Header
-		if err = client.cc.ReadHeader(&h); err != nil {
-			break
-		}
-		call := client.removeCall(h.Seq)
-		switch {
-		case call == nil:
-			// call不存在，可能是请求没有发送完整，或者因为其他原因被取消，但是服务端仍旧处理了
-			err = client.cc.ReadBody(nil)
-		case h.Error != "":
-			// call存在，但服务端处理出错
-			call.Error = fmt.Errorf(h.Error)
-			err = client.cc.ReadBody(nil)
-			call.done()
-		default:
-			// call存在，服务端处理正常，从body中读取Reply的值
-			err = client.cc.ReadBody(call.Reply)
-			if err != nil {
-				call.Error = errors.New("reading body" + err.Error())
-			}
-			call.done()
-		}
-		client.terminateCalls(err)
-	}
-}
-
-func NewClient(conn net.Conn, opt *Option) (*Client, error) {
-	f := codec.NewCodecFuncMap[opt.CodecType]
-	if f == nil {
-		err := fmt.Errorf("invalid codec type %s", opt.CodecType)
-		log.Println("rpc client: codec error:", err)
-		return nil, err
-	}
-
-	if err := json.NewEncoder(conn).Encode(opt); err != nil {
-		log.Println("rpc client: options error:", err)
-		_ = conn.Close()
-		return nil, err
-	}
-
-	return newClientCodec(f(conn), opt), nil
-}
-
-func newClientCodec(cc codec.Codec, opt *Option) *Client {
-	client := &Client{
-		seq:     1, // 从1开始，0则为无效的Call
-		cc:      cc,
-		opt:     opt,
-		pending: make(map[uint64]*Call),
-	}
-
-	go client.receive()
-
-	return client
-}
-
-func parseOptions(opts ...*Option) (*Option, error) {
-	if len(opts) == 0 || opts[0] == nil {
-		return DefaultOption, nil
-	}
-	if len(opts) != 1 {
-		return nil, errors.New("number of options is more than 1")
-	}
-
-	opt := opts[0]
-	opt.MagicNumber = DefaultOption.MagicNumber
-	if opt.CodecType == "" {
-		opt.CodecType = DefaultOption.CodecType
-	}
-
-	return opt, nil
-}
-
-func Dial(network, address string, opts ...*Option) (client *Client, err error) {
-	opt, err := parseOptions(opts...)
-	if err != nil {
-		return nil, err
-	}
-
-	conn, err := net.Dial(network, address)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if client == nil {
-			_ = conn.Close()
-		}
-	}()
-
-	return NewClient(conn, opt)
 }
 
 func (client *Client) send(call *Call) {
@@ -221,6 +125,36 @@ func (client *Client) send(call *Call) {
 	}
 }
 
+// 接收响应
+func (client *Client) receive() {
+	var err error
+	for err == nil {
+		var h codec.Header
+		if err = client.cc.ReadHeader(&h); err != nil {
+			break
+		}
+		call := client.removeCall(h.Seq)
+		switch {
+		case call == nil:
+			// call 不存在，可能是请求没有发送完整，或者因为其他原因被取消，但是服务端仍旧处理了
+			err = client.cc.ReadBody(nil)
+		case h.Error != "":
+			// call 存在，但服务端处理出错
+			call.Error = fmt.Errorf(h.Error)
+			err = client.cc.ReadBody(nil)
+			call.done()
+		default:
+			// call 存在，服务端处理正常，从 body 中读取 Reply 的值
+			err = client.cc.ReadBody(call.Reply)
+			if err != nil {
+				call.Error = errors.New("reading body" + err.Error())
+			}
+			call.done()
+		}
+	}
+	client.terminateCalls(err)
+}
+
 func (client *Client) Go(serviceMethod string, args, reply interface{}, done chan *Call) *Call {
 	if done == nil {
 		done = make(chan *Call, 10)
@@ -241,4 +175,64 @@ func (client *Client) Go(serviceMethod string, args, reply interface{}, done cha
 func (client *Client) Call(serviceMethod string, args, reply interface{}) error {
 	call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
 	return call.Error
+}
+
+func parseOptions(opts ...*Option) (*Option, error) {
+	if len(opts) == 0 || opts[0] == nil {
+		return DefaultOption, nil
+	}
+	if len(opts) != 1 {
+		return nil, errors.New("number of options is more than 1")
+	}
+	opt := opts[0]
+	opt.MagicNumber = DefaultOption.MagicNumber
+	if opt.CodecType == "" {
+		opt.CodecType = DefaultOption.CodecType
+	}
+	return opt, nil
+}
+
+func NewClient(conn net.Conn, opt *Option) (*Client, error) {
+	f := codec.NewCodecFuncMap[opt.CodecType]
+	if f == nil {
+		err := fmt.Errorf("invalid codec type %s", opt.CodecType)
+		log.Println("rpc client: codec error:", err)
+		return nil, err
+	}
+
+	if err := json.NewEncoder(conn).Encode(opt); err != nil {
+		log.Println("rpc client: options error:", err)
+		return nil, err
+	}
+	return newClientCodec(f(conn), opt), nil
+}
+
+func newClientCodec(cc codec.Codec, opt *Option) *Client {
+	client := &Client{
+		seq:     1, // 从1开始，0则为无效的 Call
+		cc:      cc,
+		opt:     opt,
+		pending: make(map[uint64]*Call),
+	}
+	go client.receive()
+	return client
+}
+
+// Dial connects to an RPC server at the specified network address
+func Dial(network, address string, opts ...*Option) (client *Client, err error) {
+	opt, err := parseOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.Dial(network, address)
+	if err != nil {
+		return nil, err
+	}
+	// close the connection if client is nil
+	defer func() {
+		if err != nil {
+			_ = conn.Close()
+		}
+	}()
+	return NewClient(conn, opt)
 }
