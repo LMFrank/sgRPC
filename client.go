@@ -1,6 +1,7 @@
 package sgRPC
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"sgRPC/codec"
 	"sync"
+	"time"
 )
 
 type Call struct {
@@ -172,9 +174,15 @@ func (client *Client) Go(serviceMethod string, args, reply interface{}, done cha
 	return call
 }
 
-func (client *Client) Call(serviceMethod string, args, reply interface{}) error {
-	call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
-	return call.Error
+func (client *Client) Call(ctx context.Context, serviceMethod string, args, reply interface{}) error {
+	call := client.Go(serviceMethod, args, reply, make(chan *Call, 1))
+	select {
+	case <-ctx.Done():
+		client.removeCall(call.Seq)
+		return errors.New("rpc client: call failed:" + ctx.Err().Error())
+	case call := <-call.Done:
+		return call.Error
+	}
 }
 
 func parseOptions(opts ...*Option) (*Option, error) {
@@ -216,6 +224,48 @@ func newClientCodec(cc codec.Codec, opt *Option) *Client {
 	}
 	go client.receive()
 	return client
+}
+
+type clientResult struct {
+	client *Client
+	err    error
+}
+
+type newClientFunc func(conn net.Conn, opt *Option) (client *Client, err error)
+
+func dialTimeout(f newClientFunc, network, address string, opts ...*Option) (client *Client, err error) {
+	opt, err := parseOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
+	// 将 net.Dial 替换为 net.DialTimeout，如果连接创建超时，将返回错误
+	conn, err := net.DialTimeout(network, address, opt.ConnectTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = conn.Close()
+		}
+	}()
+
+	ch := make(chan clientResult)
+	// 执行完成后通过信道 ch 发送结果
+	//如果 time.After() 信道先接收到消息，则说明 NewClient 执行超时，返回错误
+	go func() {
+		client, err := f(conn, opt)
+		ch <- clientResult{client: client, err: err}
+	}()
+	if opt.ConnectTimeout == 0 {
+		result := <-ch
+		return result.client, result.err
+	}
+	select {
+	case <-time.After(opt.ConnectTimeout):
+		return nil, fmt.Errorf("rpc client: connect timeout: expect within %s", opt.ConnectTimeout)
+	case result := <-ch:
+		return result.client, result.err
+	}
 }
 
 // Dial connects to an RPC server at the specified network address
