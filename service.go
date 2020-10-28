@@ -78,7 +78,6 @@ func (s *service) registerMethods() {
 		if !isExportedOrBuiltinType(argType) || !isExportedOrBuiltinType(replyType) {
 			continue
 		}
-
 		s.method[method.Name] = &methodType{
 			method:    method,
 			ArgType:   argType,
@@ -86,10 +85,6 @@ func (s *service) registerMethods() {
 		}
 		log.Printf("rpc server: register %s.%s\n", s.name, method.Name)
 	}
-}
-
-func isExportedOrBuiltinType(t reflect.Type) bool {
-	return ast.IsExported(t.Name()) || t.PkgPath() == ""
 }
 
 func (s *service) call(m *methodType, argv, replyv reflect.Value) error {
@@ -100,4 +95,8 @@ func (s *service) call(m *methodType, argv, replyv reflect.Value) error {
 		return errInter.(error)
 	}
 	return nil
+}
+
+func isExportedOrBuiltinType(t reflect.Type) bool {
+	return ast.IsExported(t.Name()) || t.PkgPath() == ""
 }
