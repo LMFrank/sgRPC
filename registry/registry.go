@@ -93,3 +93,32 @@ func (r *SgRegistry) HandleHTTP(registryPath string) {
 func HandleHTTP() {
 	DefaultSgRegistry.HandleHTTP(defaultPath)
 }
+
+// 服务启动时定时向注册中心发送心跳
+// 默认周期比注册中心设置的过期时间少 1 min
+func Heartbeat(registry, addr string, duration time.Duration) {
+	if duration == 0 {
+		duration = defaultTimeout - time.Duration(1)*time.Minute
+	}
+	var err error
+	err = sendHeartbeat(registry, addr)
+	go func() {
+		t := time.NewTicker(duration)
+		for err == nil {
+			<-t.C
+			err = sendHeartbeat(registry, addr)
+		}
+	}()
+}
+
+func sendHeartbeat(registry, addr string) error {
+	log.Println(addr, "send heart beat to registry", registry)
+	httpClient := &http.Client{}
+	req, _ := http.NewRequest("POST", registry, nil)
+	req.Header.Set("X-SgRPC-Server", addr)
+	if _, err := httpClient.Do(req); err != nil {
+		log.Println("rpc server: heart beat err:", err)
+		return err
+	}
+	return nil
+}
