@@ -223,8 +223,8 @@ func Register(rcvr interface{}) error { return DefaultServer.Register(rcvr) }
 
 const (
 	connected        = "200 Connected to sgRPC"
-	defaultRPCPath   = "/_sgRPC_"
-	defaultDebugPath = "/debug/sgRPC"
+	defaultRPCPath   = "/_sgrpc_"
+	defaultDebugPath = "/debug/sgrpc"
 )
 
 func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
